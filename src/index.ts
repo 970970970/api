@@ -1,37 +1,49 @@
 import { Hono } from 'hono';
-import { articles } from "./db/schema";
-import { initDbConnect } from "./db/index";
-import { eq } from "drizzle-orm";
-import { HTTPException } from 'hono/http-exception'
+import { cors } from 'hono/cors';
 import { prettyJSON } from 'hono/pretty-json'
+import { artcile } from './api/article';
+import { language } from './api/language';
+import { utils } from './api/utils';
+import { administrator } from './api/administrator';
+import { getRouterName, showRoutes } from 'hono/dev'
 
 export type Env = {
 	DB: D1Database;
 	BUCKET: R2Bucket;
 	CACHE: KVNamespace;
 	ENV_TYPE: 'dev' | 'prod' | 'stage';
+	JWT_SECRET: string;
 };
 
 const v1 = new Hono<{ Bindings: Env }>();
-v1.get("/articles", async (c) => {
-	const db = initDbConnect(c.env.DB);
-	const allarticles = await db.select().from(articles).all();
-	return c.json(allarticles);
-}).get("/article/:id", async (c) => {
-	const db = initDbConnect(c.env.DB);
-	const id = Number(c.req.param('id'));
-	const article = await db.query.articles.findFirst({ where: (article, { eq }) => eq(article.id, id) });
-	if (!article) {
-		return c.notFound()
-	}
-	return c.json({ status: 'ok', data: article });
-})
+v1.route("/articles", artcile)
+v1.route("/languages", language)
+v1.route("/utils", utils)
+v1.route("/administrator", administrator)
 
 const app = new Hono();
 app.use(prettyJSON())
+app.use('/v1/*',
+	cors({
+		origin: (origin, c) => {
+			return origin
+		},
+		allowMethods: ['POST', 'PUT', 'DELETE', 'GET', 'OPTIONS'],
+		exposeHeaders: ['Content-Length', 'X-Kuma-Revision'],
+		allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Accept-Language', 'Access-Control-Request-Headers', 'Access-Control-Request-Method', 'Cache-Control', 'Connection', 'Origin', 'Pragma', 'Referer', 'Sec-Fetch-Mode', 'User-Agent'],
+		maxAge: 600,
+		credentials: true,
+	})
+)
 app.notFound((c) => (
-	c.json({ message: 'Not Found', status: "error", code: 404 }, 404))
-);
+	c.json({
+		status: 404,
+		msg: 'Not Found',
+	})
+))
 app.route('/v1', v1);
+showRoutes(app, {
+	verbose: true,
+})
 
 export default app
