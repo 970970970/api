@@ -36,6 +36,16 @@ language.get("", async (c) => {
   });
 })
 
+language.get("/:id", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+  const language = await db.query.languages.findFirst({ where: (item, { eq }) => eq(item.id, id) });
+  if (!language) {
+    return c.notFound()
+  }
+  return c.json({ status: 0, msg: "ok", data: language });
+})
+
 secure.put("/languages/:id", async (c) => {
   const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));

@@ -29,6 +29,13 @@
       "when": 1718369466844,
       "tag": "0003_serious_rumiko_fujikawa",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1718693036908,
+      "tag": "0004_curly_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+/*
 CREATE TABLE languages (
     id INT PRIMARY KEY,
     code VARCHAR(10) NOT NULL,
@@ -8,6 +9,7 @@ CREATE TABLE languages (
     -- name: 语言名称, 如 'Chinese'，'English'
     -- flagEmoji: 国旗emoji, 如 🇨🇳 代表中国，🇺🇸 代表美国
 );
+*/
 
 INSERT INTO languages (id, code, name, flag)
 VALUES

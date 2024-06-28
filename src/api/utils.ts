@@ -5,14 +5,13 @@ import { hashSync, compareSync } from "bcrypt-edge"
 import { sql } from "drizzle-orm";
 import { sign } from 'hono/jwt'
 
-const saltRounds = 10;
-
 export type Env = {
   DB: D1Database;
   BUCKET: R2Bucket;
   CACHE: KVNamespace;
   ENV_TYPE: 'dev' | 'prod' | 'stage';
   JWT_SECRET: string;
+  saltRounds: number;
 };
 
 export const utils = new Hono<{ Bindings: Env }>()
@@ -24,7 +23,7 @@ utils.post("/create_admin", async (c) => {
     return c.json({ status: 400, msg: 'admin already exists', data: null });
   }
   const body = await c.req.json();
-  const hash = hashSync(body.password, saltRounds);
+  const hash = hashSync(body.password, c.env.saltRounds);
 
   //插入管理员
   await db
@@ -55,7 +54,6 @@ utils.post("/admin_login", async (c) => {
     id: user.id,
     exp: Math.floor(Date.now() / 1000) + 3600 * 72,
   }
-  console.log(c.env.JWT_SECRET);
   const token = await sign(payload, c.env.JWT_SECRET);
   return c.json({
     status: 0, msg: 'ok', data: {
@@ -69,7 +67,6 @@ utils.post("/admin_login", async (c) => {
 utils.post("/check_admin_status", async (c) => {
   const db = initDbConnect(c.env.DB);
   const body = await c.req.json();
-  console.log(body.email);
   const user = await db.query.admin_users.findFirst({ where: (user, { eq }) => eq(user.email, body.email) });
   if (!user) {
     return c.json({ status: 400, msg: 'user not found', data: null });

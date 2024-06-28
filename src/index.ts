@@ -5,7 +5,8 @@ import { artcile } from './api/article';
 import { language } from './api/language';
 import { utils } from './api/utils';
 import { administrator } from './api/administrator';
-import { getRouterName, showRoutes } from 'hono/dev'
+import { media } from './api/media';
+import { showRoutes } from 'hono/dev'
 
 export type Env = {
 	DB: D1Database;
@@ -20,6 +21,7 @@ v1.route("/articles", artcile)
 v1.route("/languages", language)
 v1.route("/utils", utils)
 v1.route("/administrator", administrator)
+v1.route("/media", media)
 
 const app = new Hono();
 app.use(prettyJSON())

@@ -5,9 +5,19 @@ compatibility_date = "2024-06-05"
 compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
-binding = "DB"                                       # i.e. available in your Worker on env.DB
+binding = "DB"                                               # i.e. available in your Worker on env.DB
 database_name = "sayno"
 database_id = "b7e781cb-a896-4c30-8e2e-412ed129213e"
+preview_database_id = "9816a109-8218-4d0f-9d23-bc20abcd8bea"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "970"
+preview_bucket_name = "970-dev"
+
+[vars]
+SaltRounds = 10
+
 
 # Automatically place your workloads in an optimal location to minimize latency.
 # If you are running back-end logic in a Worker, running it closer to your back-end infrastructure

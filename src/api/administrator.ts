@@ -5,14 +5,13 @@ import { count, eq } from "drizzle-orm";
 import { hashSync } from "bcrypt-edge"
 import { jwt } from 'hono/jwt'
 
-const saltRounds = 10;
-
 export type Env = {
   DB: D1Database;
   BUCKET: R2Bucket;
   CACHE: KVNamespace;
   ENV_TYPE: 'dev' | 'prod' | 'stage';
   JWT_SECRET: string;
+  saltRounds: number;
 };
 
 export const administrator = new Hono<{ Bindings: Env }>()
@@ -42,7 +41,7 @@ secure.get("", async (c) => {
 secure.post("/create", async (c) => {
   const db = initDbConnect(c.env.DB);
   const body = await c.req.json();
-  const hash = hashSync(body.password, saltRounds);
+  const hash = hashSync(body.password, c.env.saltRounds);
   const admin = await db
     .insert(admin_users)
     .values({ email: body.email, password: hash, status: body.status })
@@ -68,7 +67,7 @@ secure.put("/password/:id", async (c) => {
   const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));
   const body = await c.req.json();
-  const hash = hashSync(body.password, saltRounds);
+  const hash = hashSync(body.password, c.env.saltRounds);
   const action = await db
     .update(admin_users)
     .set({ password: hash })
