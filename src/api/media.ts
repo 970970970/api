@@ -16,11 +16,17 @@ export type Env = {
 export const media = new Hono<{ Bindings: Env }>()
 const secure = new Hono<{ Bindings: Env }>()
 
-secure.use('*', (c, next) => {
+secure.use('*', async (c, next) => {
   const jwtMiddleware = jwt({
     secret: c.env.JWT_SECRET,
   })
-  return jwtMiddleware(c, next)
+  try {
+    await jwtMiddleware(c, next)
+  } catch (e) {
+    return c.json({
+      status: 401, msg: 'unauthorized',
+    })
+  }
 });
 
 secure.get("", async (c) => {

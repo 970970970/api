@@ -17,11 +17,17 @@ export type Env = {
 export const administrator = new Hono<{ Bindings: Env }>()
 const secure = new Hono<{ Bindings: Env }>()
 
-secure.use('*', (c, next) => {
+secure.use('*', async (c, next) => {
   const jwtMiddleware = jwt({
     secret: c.env.JWT_SECRET,
   })
-  return jwtMiddleware(c, next)
+  try {
+    await jwtMiddleware(c, next)
+  } catch (e) {
+    return c.json({
+      status: 401, msg: 'unauthorized',
+    })
+  }
 });
 
 secure.get("", async (c) => {
@@ -87,8 +93,16 @@ secure.put("/status/:id", async (c) => {
     .set({ status: body.status })
     .where(eq(admin_users.id, id))
     .execute();
+  const admin = await db.select().from(admin_users).where(eq(admin_users.id, id)).get();
   return c.json({
     status: 0, msg: 'ok', data: null
+  })
+})
+
+secure.get("me", async (c) => {
+  const payload = c.get('jwtPayload')
+  return c.json({
+    status: 0, msg: 'ok', data: payload
   })
 })
 

@@ -15,11 +15,17 @@ export type Env = {
 export const language = new Hono<{ Bindings: Env }>()
 const secure = new Hono<{ Bindings: Env }>()
 
-secure.use('*', (c, next) => {
+secure.use('*', async (c, next) => {
   const jwtMiddleware = jwt({
     secret: c.env.JWT_SECRET,
   })
-  return jwtMiddleware(c, next)
+  try {
+    await jwtMiddleware(c, next)
+  } catch (e) {
+    return c.json({
+      status: 401, msg: 'unauthorized',
+    })
+  }
 });
 
 language.get("", async (c) => {
@@ -46,7 +52,7 @@ language.get("/:id", async (c) => {
   return c.json({ status: 0, msg: "ok", data: language });
 })
 
-secure.put("/languages/:id", async (c) => {
+secure.put("/:id", async (c) => {
   const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));
   const body = await c.req.json();
@@ -59,6 +65,26 @@ secure.put("/languages/:id", async (c) => {
   return c.json({
     status: 0, msg: 'ok', data: language
   })
+})
+
+secure.delete("/:id", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+  await db.delete(languages).where(eq(languages.id, id)).execute();
+  return c.json({ status: 0, msg: 'ok' });
+})
+
+secure.post("/create", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const body = await c.req.json();
+  /*
+  const code = body.code;
+  const name = body.name;
+  const flag = body.flag;
+  const status = Boolean(body.status);
+  */
+  const language = await db.insert(languages).values(body).returning().execute();
+  return c.json({ status: 0, msg: 'ok', data: language });
 })
 
 language.route("/secure", secure)

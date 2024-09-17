@@ -2,8 +2,10 @@ import { Hono } from 'hono';
 import { initDbConnect } from "../db/index";
 import { admin_users } from "../db/schema";
 import { hashSync, compareSync } from "bcrypt-edge"
-import { sql } from "drizzle-orm";
+import { param, sql } from "drizzle-orm";
 import { sign } from 'hono/jwt'
+import { articleService } from '../services/article';
+import { language } from './language';
 
 export type Env = {
   DB: D1Database;
@@ -12,9 +14,36 @@ export type Env = {
   ENV_TYPE: 'dev' | 'prod' | 'stage';
   JWT_SECRET: string;
   saltRounds: number;
+  QUEUE: Queue;
 };
 
 export const utils = new Hono<{ Bindings: Env }>()
+
+utils.get("/producer", async (c) => {
+  //向队列里写入数据
+  const message = {
+    id: 1,
+    category: "article",
+    action: "init",
+  }
+
+  /*
+  const message = {
+    id: 1,
+    category: "article",
+    action: "translate",
+    params: {
+      language: "English"
+    }
+  }
+  */
+
+  //const article = new articleService(c.env.DB)
+  //console.log(await article.getArticleByID(1))
+
+  await c.env.QUEUE.send(JSON.stringify(message))
+  return c.json({ status: 0, message: 'ok', data: null });
+})
 
 utils.post("/create_admin", async (c) => {
   const db = initDbConnect(c.env.DB);
