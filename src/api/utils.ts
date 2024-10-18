@@ -22,7 +22,7 @@ export const utils = new Hono<{ Bindings: Env }>()
 utils.get("/producer", async (c) => {
   //向队列里写入数据
   const message = {
-    id: 1,
+    id: 22,
     category: "article",
     action: "init",
   }

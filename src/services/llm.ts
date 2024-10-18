@@ -3,13 +3,15 @@ import { getSummaryPrompt, getTranslationPrompt } from '../prompts/prompts'
 
 export class llmService {
   private openai: OpenAI;
+  private model: string;
 
-  constructor(options: { apiKey: string; baseURL: string }) {
+  constructor(options: { apiKey: string; baseURL: string; model: string }) {
     this.openai = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
       timeout: 1500000,
     });
+    this.model = options.model;
   }
 
   async summary(text: string, length: number = 100): Promise<string> {
@@ -20,7 +22,7 @@ export class llmService {
     ];
 
     const completion = await this.openai.chat.completions.create({
-      model: "deepseek-chat",
+      model: this.model,
       messages: messages,
       temperature: 0.5,
     }, {
@@ -43,13 +45,12 @@ export class llmService {
     ];
 
     const completion = await this.openai.chat.completions.create({
-      model: "deepseek-chat",
+      model: this.model,
       messages: messages,
       temperature: 0.5,
     }, {
       timeout: 1500000,
-    }
-    );
+    });
 
     const content = completion.choices[0].message.content;
     if (content === null) {
@@ -59,4 +60,3 @@ export class llmService {
     return content;
   }
 }
-

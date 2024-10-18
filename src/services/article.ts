@@ -1,6 +1,6 @@
 import { initDbConnect } from "../db/index";
 import { articles, languages } from "../db/schema";
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { llmService } from "./llm";
 import { InferInsertModel, InferSelectModel } from 'drizzle-orm'; // 导入 InferInsertModel 和 InferSelectModel 类型
 
@@ -15,20 +15,63 @@ export type Env = {
   AI: Ai;
   ENV_TYPE: 'dev' | 'prod' | 'stage';
   JWT_SECRET: string;
-  OPENAI_URL: string;
+  DEEPSEEK_URL: string;
+  SILICONFLOW_URL: string;
+  AI_PROVIDER: string;
   DEEPSEEK_TOKEN: string;
+  SILICONFLOW_TOKEN: string;
   QUEUE: Queue;
+  DEEPSEEK_MODEL: string;
+  SILICONFLOW_MODEL: string;
 };
 
 export class articleService {
   private db: any;
   private llmServiceInstance: llmService;
   private queue: Queue;
+  private env: Env;  // 添加这一行
 
   constructor(env: Env) {
+    this.env = env;  // 添加这一行
     this.db = initDbConnect(env.DB);
-    this.llmServiceInstance = new llmService({ apiKey: env.DEEPSEEK_TOKEN, baseURL: env.OPENAI_URL });
+    const apiUrl = this.getAiUrl(env);
+    const apiToken = this.getAiToken(env);
+    const model = this.getAiModel(env);
+    this.llmServiceInstance = new llmService({ apiKey: apiToken, baseURL: apiUrl, model: model });
     this.queue = env.QUEUE;
+  }
+
+  private getAiUrl(env: Env): string {
+    switch (env.AI_PROVIDER) {
+      case 'DEEPSEEK':
+        return env.DEEPSEEK_URL;
+      case 'SILICONFLOW':
+        return env.SILICONFLOW_URL;
+      default:
+        throw new Error(`Unknown AI provider: ${env.AI_PROVIDER}`);
+    }
+  }
+
+  private getAiToken(env: Env): string {
+    switch (env.AI_PROVIDER) {
+      case 'DEEPSEEK':
+        return env.DEEPSEEK_TOKEN;
+      case 'SILICONFLOW':
+        return env.SILICONFLOW_TOKEN;
+      default:
+        throw new Error(`Unknown AI provider: ${env.AI_PROVIDER}`);
+    }
+  }
+
+  private getAiModel(env: Env): string {
+    switch (env.AI_PROVIDER) {
+      case 'DEEPSEEK':
+        return env.DEEPSEEK_MODEL;
+      case 'SILICONFLOW':
+        return env.SILICONFLOW_MODEL;
+      default:
+        throw new Error(`Unknown AI provider: ${env.AI_PROVIDER}`);
+    }
   }
 
   async createArticle(article: NewArticle) {
@@ -72,16 +115,28 @@ export class articleService {
 
   async getArticleByOriginIDAndLanguage(originID: number, language: string) {
     try {
+      console.log("originID: ", originID)
+      console.log("language: ", language)
       const article = await this.db
         .select()
         .from(articles)
-        .where(eq(articles.origin_id, originID))
-        .where(eq(articles.language, language))
+        .where(
+          and(
+            eq(articles.origin_id, originID),
+            eq(articles.language, language)
+          )
+        )
         .get();
 
       if (!article) {
-        console.log("Article not found"); // 添加日志
-        return null; // 返回 null 表示未找到
+        console.log("Article not found");
+        return null;
+      }
+
+      // 额外的检查
+      if (article.origin_id !== originID || article.language !== language) {
+        console.log("Unexpected article returned:", article);
+        return null;
       }
 
       return article;
@@ -119,11 +174,13 @@ export class articleService {
         return null;
       }
 
-      console.log(article);
-      //调用大模型获得摘要
+      console.log("Article found:", article);
+      console.log("AI Provider:", this.env.AI_PROVIDER);
+      console.log("AI URL:", this.getAiUrl(this.env));
 
+      //调用大模型获得摘要
       const summary = await this.llmServiceInstance.summary(article.content);
-      console.log(summary);
+      console.log("Generated summary:", summary);
 
       article.summary = summary;
       await this.updateArticle(article);
@@ -145,6 +202,10 @@ export class articleService {
       }
     } catch (error) {
       console.error("Error in initArticle:", error);
+      if (error instanceof Error) {
+        console.error("Error message:", error.message);
+        console.error("Error stack:", error.stack);
+      }
       throw error;
     }
   }
@@ -173,6 +234,9 @@ export class articleService {
 
     //从数据库中查找origin_id为id,language为language的文章，如果没有
     const translatedArticle = await this.getArticleByOriginIDAndLanguage(id, language);
+    console.log("translatedArticle: ", translatedArticle);
+    console.log("id: ", id)
+    console.log("language: ", language)
     if (!translatedArticle) {
       const newArticle: NewArticle = {
         origin_id: id,
@@ -193,6 +257,14 @@ export class articleService {
       console.log(await this.updateArticle(translatedArticle));
     }
   }
+
+  getLlmServiceInstance(): llmService {
+    return this.llmServiceInstance;
+  }
 }
+
+
+
+
 
 

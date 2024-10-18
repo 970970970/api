@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { OpenAI } from 'openai';
-import { getSummaryPrompt, getTranslationPrompt } from '../prompts/prompts'
-import { llmService } from "../services/llm";
+import { getSummaryPrompt } from '../prompts/prompts'
+import { articleService } from "../services/article";
 
 export type Env = {
   DB: D1Database;
@@ -10,7 +10,15 @@ export type Env = {
   AI: Ai;
   ENV_TYPE: 'dev' | 'prod' | 'stage';
   OPENAI_URL: string;
+  DEEPSEEK_URL: string;
+  SILICONFLOW_URL: string;
+  AI_PROVIDER: string;
   DEEPSEEK_TOKEN: string;
+  SILICONFLOW_TOKEN: string;
+  DEEPSEEK_MODEL: string;
+  SILICONFLOW_MODEL: string;
+  JWT_SECRET: string;
+  QUEUE: Queue;
   TASK: { add: (a: number, b: number) => number };
 };
 
@@ -52,10 +60,10 @@ ai.post("/openai_translate", async (c) => {
   const fromLang = body.from
   const toLang = body.to
 
-  const llmServiceInstance = new llmService({ apiKey: c.env.DEEPSEEK_TOKEN, baseURL: c.env.OPENAI_URL });
+  const articleServiceInstance = new articleService(c.env);
+  const llmServiceInstance = articleServiceInstance.getLlmServiceInstance();
   const content = await llmServiceInstance.translate(text, fromLang, toLang);
 
   console.log(content);
   return c.json({ status: 0, msg: 'ok', data: content })
 })
-

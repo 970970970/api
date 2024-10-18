@@ -17,7 +17,12 @@ preview_bucket_name = "970-dev"
 
 [vars]
 SaltRounds = 10
-OPENAI_URL = "https://api.deepseek.com"
+DEEPSEEK_URL = "https://api.deepseek.com"
+SILICONFLOW_URL = "https://api.siliconflow.cn"
+DEEPSEEK_MODEL = "deepseek-chat"
+SILICONFLOW_MODEL = "Qwen/Qwen2.5-72B-Instruct" # 请替换为实际的模型名称
+AI_PROVIDER = "SILICONFLOW"
+# AI_PROVIDER = "DEEPSEEK" # 或 "SILICONFLOW"
 
 
 # Automatically place your workloads in an optimal location to minimize latency.
@@ -75,6 +80,14 @@ binding = "AI"
 # [[migrations]]
 # tag = "v1"
 # new_classes = ["MyDurableObject"]
+
+[[durable_objects.bindings]]
+name = "ARTICLE_PROCESSOR"
+class_name = "ArticleProcessor"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ArticleProcessor"]
 
 # Bind a Hyperdrive configuration. Use to accelerate access to your existing databases from Cloudflare Workers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#hyperdrive
