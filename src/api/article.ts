@@ -61,9 +61,9 @@ secure.get("/:id{[0-9]+}", async (c) => {
     // 提取模块 ID 列表
     const modIds = articleMods.map(am => am.mod_id);
 
-    return c.json({ 
-      status: 0, 
-      msg: "ok", 
+    return c.json({
+      status: 0,
+      msg: "ok",
       data: {
         ...article,
         mods: modIds
@@ -156,7 +156,7 @@ secure.get("", async (c) => {
 // 修改文章列表接口
 artcile.get("/list/:mod/:language", async (c) => {
   const db = initDbConnect(c.env.DB);
-  const modId = Number(c.req.param('mod'));
+  const modCode = c.req.param('mod');
   const language = c.req.param('language');
 
   const page = parseInt(c.req.query('page') || '1');
@@ -164,6 +164,23 @@ artcile.get("/list/:mod/:language", async (c) => {
   const offset = (page - 1) * pageSize;
 
   try {
+    // 先根据 code 获取 mod_id
+    const mod = await db
+      .select({
+        id: mods.id
+      })
+      .from(mods)
+      .where(eq(mods.code, modCode))
+      .get();
+
+    if (!mod) {
+      return c.json({
+        status: 404,
+        msg: "Module not found",
+        data: null
+      }, 404);
+    }
+
     // 修改查询总数的方式
     const totalCount = await db
       .select({
@@ -173,7 +190,7 @@ artcile.get("/list/:mod/:language", async (c) => {
       .leftJoin(article_mods, eq(articles.id, article_mods.article_id))
       .where(
         and(
-          eq(article_mods.mod_id, modId),
+          eq(article_mods.mod_id, mod.id),
           eq(articles.language, language)
         )
       )
@@ -192,7 +209,7 @@ artcile.get("/list/:mod/:language", async (c) => {
       .leftJoin(article_mods, eq(articles.id, article_mods.article_id))
       .where(
         and(
-          eq(article_mods.mod_id, modId),
+          eq(article_mods.mod_id, mod.id),
           eq(articles.language, language)
         )
       )
