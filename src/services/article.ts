@@ -75,10 +75,16 @@ export class articleService {
   }
 
   async createArticle(article: NewArticle) {
+    const MAX_RANK = 10000;
+    const normalizedArticle = {
+      ...article,
+      rank: MAX_RANK - (article.rank || 0) // 反转 rank 值
+    };
+
     try {
       const result = await this.db
         .insert(articles)
-        .values(article)
+        .values(normalizedArticle)
         .returning()
         .get();
 

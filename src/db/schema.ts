@@ -1,5 +1,28 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
+
+export const mods = sqliteTable('mods', {
+  id: integer('id').primaryKey(),
+  code: text('code').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  status: integer('status').default(1).notNull(),
+}, (table) => {
+  return {
+    codeIdx: uniqueIndex('mod_code_idx').on(table.code),
+  }
+});
+
+export const article_mods = sqliteTable('article_mods', {
+  article_id: integer('article_id').notNull(),
+  mod_id: integer('mod_id').notNull(),
+}, (table) => {
+  return {
+    pk: primaryKey({ columns: [table.article_id, table.mod_id] }),
+    modIdx: index('article_mods_mod_idx').on(table.mod_id),
+    articleIdx: index('article_mods_article_idx').on(table.article_id),
+  }
+});
 
 export const articles = sqliteTable('articles', {
   id: integer('id').primaryKey(),
@@ -11,10 +34,9 @@ export const articles = sqliteTable('articles', {
   rank: integer('rank').default(1).notNull(),
   published_at: integer('published_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
   language: text('language').notNull(),
-  category: text('category').notNull(),
 }, (table) => {
   return {
-    listIdx: index("list_idx").on(table.category, table.language, table.rank),
+    listIdx: index("list_idx").on(table.language, table.rank, table.published_at),
     originIdx: index("origin_idx").on(table.origin_id),
   }
 });
@@ -24,6 +46,9 @@ export const admin_users = sqliteTable('admin_users', {
   email: text('email').notNull(),
   password: text('password').notNull(),
   two_factor_secret: text('two_factor_secret'),
+  two_factor_enabled: integer('two_factor_enabled', { mode: 'boolean' }).default(false),
+  created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`CURRENT_TIMESTAMP`),
   status: integer('status').default(1).notNull(),
 }, (table) => {
   return {

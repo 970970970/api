@@ -87,4 +87,21 @@ secure.post("/create", async (c) => {
   return c.json({ status: 0, msg: 'ok', data: language });
 })
 
+secure.put("/:id/status", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json();
+  const language = await db
+    .update(languages)
+    .set({ status: body.status })
+    .where(eq(languages.id, id))
+    .returning()
+    .execute();
+  return c.json({
+    status: 0, 
+    msg: 'ok', 
+    data: language
+  });
+});
+
 language.route("/secure", secure)
