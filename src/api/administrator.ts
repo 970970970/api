@@ -10,18 +10,64 @@ class TOTP {
   private static readonly DIGITS = '0123456789';
   private static readonly PERIOD = 30; // 30 seconds
   private static readonly CODE_LENGTH = 6;
+  private static readonly BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+  // Base32 解码函数
+  private static base32Decode(str: string): Uint8Array {
+    let bits = 0;
+    let value = 0;
+    let index = 0;
+    const result = new Uint8Array(Math.ceil(str.length * 5 / 8));
+
+    str = str.toUpperCase();
+    for (let i = 0; i < str.length; i++) {
+      const v = this.BASE32_CHARS.indexOf(str[i]);
+      if (v < 0) continue;
+      
+      value = (value << 5) | v;
+      bits += 5;
+
+      if (bits >= 8) {
+        result[index++] = (value >>> (bits - 8)) & 255;
+        bits -= 8;
+      }
+    }
+
+    return result.slice(0, index);
+  }
 
   static async generateSecret(): Promise<string> {
     const array = new Uint8Array(20);
     crypto.getRandomValues(array);
-    return btoa(String.fromCharCode(...array))
-      .replace(/[^a-zA-Z0-9]/g, '')
-      .slice(0, 32);
+    
+    // 生成 Base32 编码的密钥
+    let secret = '';
+    for (let i = 0; i < array.length; i += 5) {
+      let buffer = 0;
+      let bufferSize = 0;
+      
+      for (let j = 0; j < 5 && i + j < array.length; j++) {
+        buffer = (buffer << 8) | array[i + j];
+        bufferSize += 8;
+        
+        while (bufferSize >= 5) {
+          secret += this.BASE32_CHARS[(buffer >>> (bufferSize - 5)) & 31];
+          bufferSize -= 5;
+          buffer &= (1 << bufferSize) - 1;
+        }
+      }
+      
+      if (bufferSize > 0) {
+        secret += this.BASE32_CHARS[(buffer << (5 - bufferSize)) & 31];
+      }
+    }
+    
+    return secret;
   }
 
   static async generateTOTP(secret: string, counter: number): Promise<string> {
-    // 将 secret 解码为 Uint8Array
-    const secretBytes = Uint8Array.from(atob(secret), c => c.charCodeAt(0));
+    // 将 Base32 编码的密钥解码为字节数组
+    const secretBytes = this.base32Decode(secret);
     
     // 将计数器转换为 8 字节的 buffer
     const counterBytes = new Uint8Array(8);
@@ -187,25 +233,14 @@ secure.get("me", async (c) => {
 
 // 生成两步验证密钥和二维码
 secure.post("/enable-2fa", async (c) => {
-  const db = initDbConnect(c.env.DB);
   const userId = c.get('jwtPayload').id;
+  const email = c.get('jwtPayload').email;
 
   try {
-    // 生成密钥
+    // 只生成密钥和二维码,不保存到数据库
     const secret = await TOTP.generateSecret();
     
-    // 更新用户记录
-    await db
-      .update(admin_users)
-      .set({ 
-        two_factor_secret: secret,
-        two_factor_enabled: false
-      })
-      .where(eq(admin_users.id, userId))
-      .execute();
-
     // 生成 TOTP URI
-    const email = c.get('jwtPayload').email;
     const otpauth = `otpauth://totp/SayNo:${email}?secret=${secret}&issuer=SayNo&algorithm=SHA1&digits=6&period=30`;
     
     // 生成二维码 URL
@@ -220,7 +255,7 @@ secure.post("/enable-2fa", async (c) => {
       }
     });
   } catch (error) {
-    console.error("Error enabling 2FA:", error);
+    console.error("Error generating 2FA secret:", error);
     return c.json({
       status: 500,
       msg: "Internal server error",
@@ -234,25 +269,11 @@ secure.post("/verify-2fa", async (c) => {
   const db = initDbConnect(c.env.DB);
   const userId = c.get('jwtPayload').id;
   const body = await c.req.json();
-  const { code } = body;
+  const { code, secret } = body;
 
   try {
-    const user = await db
-      .select()
-      .from(admin_users)
-      .where(eq(admin_users.id, userId))
-      .get();
-
-    if (!user?.two_factor_secret) {
-      return c.json({
-        status: 400,
-        msg: "Two-factor authentication not initialized",
-        data: null
-      });
-    }
-
     // 验证码是否正确
-    const isValid = await TOTP.verify(code, user.two_factor_secret);
+    const isValid = await TOTP.verify(code, secret);
 
     if (!isValid) {
       return c.json({
@@ -262,10 +283,13 @@ secure.post("/verify-2fa", async (c) => {
       });
     }
 
-    // 启用两步验证
+    // 验证通过后,更新用户的两步验证信息
     await db
       .update(admin_users)
-      .set({ two_factor_enabled: true })
+      .set({ 
+        two_factor_enabled: true,
+        two_factor_secret: secret 
+      })
       .where(eq(admin_users.id, userId))
       .execute();
 
@@ -314,7 +338,51 @@ secure.post("/disable-2fa", async (c) => {
   }
 });
 
-// 将登录接口移到 administrator 路由组
+// 检查用户是否启用了两步验证
+administrator.post("/check-2fa", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const body = await c.req.json();
+  const { email } = body;
+
+  try {
+    const user = await db
+      .select({
+        two_factor_enabled: admin_users.two_factor_enabled
+      })
+      .from(admin_users)
+      .where(eq(admin_users.email, email))
+      .get();
+
+    if (!user) {
+      return c.json({
+        status: 404,
+        msg: "User not found",
+        data: {
+          two_factor_enabled: false
+        }
+      });
+    }
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: {
+        two_factor_enabled: user.two_factor_enabled
+      }
+    });
+  } catch (error) {
+    console.error("Error checking 2FA status:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: {
+        two_factor_enabled: false
+      }
+    });
+  }
+});
+
+// 修改登录接口
 administrator.post("/login", async (c) => {
   const db = initDbConnect(c.env.DB);
   const body = await c.req.json();
@@ -340,15 +408,13 @@ administrator.post("/login", async (c) => {
       // 如果没有提供验证码
       if (!code) {
         return c.json({
-          status: 202,
-          msg: "Two-factor authentication required",
-          data: {
-            require_2fa: true
-          }
+          status: 401,
+          msg: "Two-factor authentication code required",
+          data: null
         });
       }
 
-      // 验证两步验证码
+      // 验证两步证码
       const isValid = await TOTP.verify(code, user.two_factor_secret);
 
       if (!isValid) {
@@ -358,13 +424,6 @@ administrator.post("/login", async (c) => {
           data: null
         });
       }
-    } else if (user.two_factor_enabled) {
-      // 如果启用了两步验证但没有密钥，这是一个错误状态
-      return c.json({
-        status: 500,
-        msg: "Two-factor authentication configuration error",
-        data: null
-      });
     }
 
     // 生成 JWT token
@@ -384,6 +443,36 @@ administrator.post("/login", async (c) => {
     });
   } catch (error) {
     console.error("Error logging in:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 直接开启两步验证
+secure.post("/toggle-2fa", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const userId = c.get('jwtPayload').id;
+  const body = await c.req.json();
+
+  try {
+    await db
+      .update(admin_users)
+      .set({ 
+        two_factor_enabled: body.enabled
+      })
+      .where(eq(admin_users.id, userId))
+      .execute();
+
+    return c.json({
+      status: 0,
+      msg: "Two-factor authentication status updated",
+      data: null
+    });
+  } catch (error) {
+    console.error("Error toggling 2FA:", error);
     return c.json({
       status: 500,
       msg: "Internal server error",
