@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { initDbConnect } from "../db/index";
-import { articles, article_mods, mods } from "../db/schema";
+import { articles, article_mods, mods, languages } from "../db/schema";
 import { jwt } from 'hono/jwt'
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, or, inArray } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 
 export type Env = {
@@ -11,6 +11,7 @@ export type Env = {
   CACHE: KVNamespace;
   ENV_TYPE: 'dev' | 'prod' | 'stage';
   JWT_SECRET: string;
+  QUEUE: Queue;
 };
 
 const artcile = new Hono<{ Bindings: Env }>()
@@ -29,9 +30,6 @@ secure.use('*', async (c, next) => {
   }
 });
 
-artcile.get("", async (c) => {
-  return c.json({ status: 0, msg: 'ok' })
-})
 
 secure.get("/:id{[0-9]+}", async (c) => {
   const db = initDbConnect(c.env.DB);
@@ -83,22 +81,59 @@ secure.post("", async (c) => {
   const db = initDbConnect(c.env.DB);
   const body = await c.req.json();
   console.log(body)
-  const article = await db
-    .insert(articles)
-    .values({
-      title: body.title,
-      content: body.md,
-      image: body.image || null,
-      language: body.language || 'Chinese',
-      summary: body.summary || '',
-      rank: body.rank || 0,
-    })
-    .returning()
-    .execute();
-  return c.json({
-    status: 0, msg: 'ok', data: article
-  })
-})
+
+  try {
+    // 1. 创建文章
+    const article = await db
+      .insert(articles)
+      .values({
+        title: body.title,
+        content: body.md,
+        image: body.image || null,
+        language: body.language || 'Chinese',
+        summary: body.summary || '',
+        rank: body.rank || 0,
+      })
+      .returning()
+      .execute();
+
+    // 2. 创建文章与模块的关联
+    if (body.mods) {
+      const modIds = body.mods.split(',').map(Number);
+      for (const modId of modIds) {
+        await db
+          .insert(article_mods)
+          .values({
+            article_id: article[0].id,
+            mod_id: modId
+          })
+          .execute();
+      }
+    }
+
+    // 3. 添加队列消息，让 LLM 处理摘要和翻译
+    const message = {
+      id: article[0].id,
+      category: "article",
+      action: "init",
+      params: {}
+    }
+    await c.env.QUEUE.send(JSON.stringify(message));
+
+    return c.json({
+      status: 0,
+      msg: 'ok',
+      data: article
+    });
+  } catch (error) {
+    console.error("Error creating article:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
 
 secure.get("", async (c) => {
   const db = initDbConnect(c.env.DB);
@@ -164,7 +199,7 @@ artcile.get("/list/:mod/:language", async (c) => {
   const offset = (page - 1) * pageSize;
 
   try {
-    // 先根据 code 获取 mod_id
+    // 先根 code 获取 mod_id
     const mod = await db
       .select({
         id: mods.id
@@ -297,7 +332,7 @@ secure.get("/mods", async (c) => {
       .from(mods)
       .get();
 
-    // 获取分页数据
+    // 获页数据
     const items = await db
       .select()
       .from(mods)
@@ -573,13 +608,27 @@ secure.put("/:id{[0-9]+}", async (c) => {
   const body = await c.req.json();
 
   try {
-    // 开始事务
-    // 1. 更新文章基本信息
+    // 1. 先获取原文章信息
+    const originalArticle = await db
+      .select()
+      .from(articles)
+      .where(eq(articles.id, id))
+      .get();
+
+    if (!originalArticle) {
+      return c.json({
+        status: 404,
+        msg: "Article not found",
+        data: null
+      }, 404);
+    }
+
+    // 2. 更新当前文章
     const article = await db
       .update(articles)
       .set({
         title: body.title,
-        content: body.content,
+        content: body.md,
         summary: body.summary,
         image: body.image,
         rank: body.rank,
@@ -589,32 +638,73 @@ secure.put("/:id{[0-9]+}", async (c) => {
       .returning()
       .execute();
 
-    if (!article.length) {
-      return c.json({
-        status: 404,
-        msg: "Article not found",
-        data: null
-      }, 404);
-    }
+    // 3. 处理模块关联
+    // 如果是主文章（origin_id 为 null），需要同步更新所有翻译版本的模块
+    if (!originalArticle.origin_id) {
+      // 3.1 获取所有翻译版本
+      const translatedArticles = await db
+        .select()
+        .from(articles)
+        .where(eq(articles.origin_id, id))
+        .execute();
 
-    // 2. 更新文章模块关联
-    // 先删除旧的关联
-    await db
-      .delete(article_mods)
-      .where(eq(article_mods.article_id, id))
-      .execute();
+      const allArticleIds = [id, ...translatedArticles.map(a => a.id)];
 
-    // 添加新的关联
-    if (body.mods) {
-      const modIds = body.mods.split(',').map(Number);
-      for (const modId of modIds) {
-        await db
-          .insert(article_mods)
-          .values({
-            article_id: id,
-            mod_id: modId
-          })
-          .execute();
+      // 3.2 删除所有相关文章的模块关联
+      await db
+        .delete(article_mods)
+        .where(inArray(article_mods.article_id, allArticleIds))
+        .execute();
+
+      // 3.3 为所有文章创建新的模块关联
+      if (body.mods) {
+        const modIds = body.mods.split(',').map(Number);
+        for (const articleId of allArticleIds) {
+          for (const modId of modIds) {
+            await db
+              .insert(article_mods)
+              .values({
+                article_id: articleId,
+                mod_id: modId
+              })
+              .execute();
+          }
+        }
+      }
+
+      // 4. 检查内容是否发生变化，如果变化了需要重新翻译
+      if (originalArticle.content !== body.md) {
+        // 为每个翻译版本创建翻译任务
+        for (const translatedArticle of translatedArticles) {
+          const message = {
+            id: id,
+            category: "article",
+            action: "translate",
+            params: {
+              language: translatedArticle.language
+            }
+          }
+          await c.env.QUEUE.send(JSON.stringify(message));
+        }
+      }
+    } else {
+      // 如果是翻译版本，只更新自己的模块关联
+      await db
+        .delete(article_mods)
+        .where(eq(article_mods.article_id, id))
+        .execute();
+
+      if (body.mods) {
+        const modIds = body.mods.split(',').map(Number);
+        for (const modId of modIds) {
+          await db
+            .insert(article_mods)
+            .values({
+              article_id: id,
+              mod_id: modId
+            })
+            .execute();
+        }
       }
     }
 
@@ -663,6 +753,203 @@ secure.get("/mod-options", async (c) => {
     });
   } catch (error) {
     console.error("Error fetching mod options:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 删除文章
+secure.delete("/:id{[0-9]+}", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+
+  try {
+    // 获取所有需要删除的文章ID（包括原文和翻译）
+    const articlesToDelete = await db
+      .select()
+      .from(articles)
+      .where(
+        or(
+          eq(articles.id, id),
+          eq(articles.origin_id, id)
+        )
+      )
+      .execute();
+
+    const articleIds = articlesToDelete.map(article => article.id);
+
+    if (articleIds.length === 0) {
+      return c.json({
+        status: 404,
+        msg: "Article not found",
+        data: null
+      }, 404);
+    }
+
+    // 删除所有相关文章的模块关联
+    await db
+      .delete(article_mods)
+      .where(
+        inArray(article_mods.article_id, articleIds)
+      )
+      .execute();
+
+    // 删除所有相关文章
+    const result = await db
+      .delete(articles)
+      .where(
+        or(
+          eq(articles.id, id),
+          eq(articles.origin_id, id)
+        )
+      )
+      .returning()
+      .execute();
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: null
+    });
+  } catch (error) {
+    console.error("Error deleting article:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 获取特定模块的单篇文章（用户协议/隐私政策）
+artcile.get("/mod/:code/:language", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const modCode = c.req.param('code');    // 例如：user_agreement 或 privacy_policy
+  const language = c.req.param('language');
+
+  console.log("modCode: ", modCode)
+  console.log("language: ", language)
+
+  try {
+    // 先根据 code 获取 mod_id
+    const mod = await db
+      .select({
+        id: mods.id
+      })
+      .from(mods)
+      .where(eq(mods.code, modCode))
+      .get();
+
+    if (!mod) {
+      return c.json({
+        status: 404,
+        msg: "Module not found",
+        data: null
+      }, 404);
+    }
+
+    // 查询对应的文章
+    const article = await db
+      .select({
+        id: articles.id,
+        title: articles.title,
+        content: articles.content,
+        summary: articles.summary,
+        language: articles.language,
+        published_at: articles.published_at
+      })
+      .from(articles)
+      .leftJoin(article_mods, eq(articles.id, article_mods.article_id))
+      .where(
+        and(
+          eq(article_mods.mod_id, mod.id),
+          eq(articles.language, language)
+        )
+      )
+      .get();
+
+    if (!article) {
+      return c.json({
+        status: 404,
+        msg: "Article not found",
+        data: null
+      }, 404);
+    }
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: article
+    });
+  } catch (error) {
+    console.error("Error fetching special article:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 添加手动触发翻译的接口
+secure.post("/translate/:id", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+
+  try {
+    // 1. 检查文章是否存在
+    const article = await db
+      .select()
+      .from(articles)
+      .where(eq(articles.id, id))
+      .get();
+
+    if (!article) {
+      return c.json({
+        status: 404,
+        msg: "Article not found",
+        data: null
+      }, 404);
+    }
+
+    // 2. 如果是翻译版本，不允许触发翻译
+    if (article.origin_id) {
+      return c.json({
+        status: 400,
+        msg: "Cannot translate a translated article",
+        data: null
+      }, 400);
+    }
+
+    // 3. 获取所有支持的语言
+    const languagesList = await db.select().from(languages);
+
+    // 4. 为每种语言创建翻译任务（除了原文语言）
+    for (const language of languagesList) {
+      if (language.name === article.language) {
+        continue;
+      }
+      const message = {
+        id: id,
+        category: "article",
+        action: "translate",
+        params: {
+          language: language.name
+        }
+      };
+      await c.env.QUEUE.send(JSON.stringify(message));
+    }
+
+    return c.json({
+      status: 0,
+      msg: "Translation tasks created successfully",
+      data: null
+    });
+  } catch (error) {
+    console.error("Error triggering translation:", error);
     return c.json({
       status: 500,
       msg: "Internal server error",

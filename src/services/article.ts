@@ -218,7 +218,6 @@ export class articleService {
 
   //翻译文章
   async translateArticle(id: number, language: string) {
-    //从数据库中查找id为id的文章,没有找到直接返回
     const article = await this.getArticleByID(id);
 
     if (!article) {
@@ -228,21 +227,11 @@ export class articleService {
 
     console.log("target language: ", language)
 
-    //调用大模型翻译接口，将标题、正文和摘要进行翻译
     const title = await this.llmServiceInstance.translate(article.title, article.language, language);
-    console.log("translated title: ", title);
-    //const content = "none"
-    //const summary = "none"
     const summary = await this.llmServiceInstance.translate(article.summary, article.language, language);
-    console.log("translated summary: ", summary);
     const content = await this.llmServiceInstance.translate(article.content, article.language, language);
-    console.log("translated content: ", content);
 
-    //从数据库中查找origin_id为id,language为language的文章，如果没有
     const translatedArticle = await this.getArticleByOriginIDAndLanguage(id, language);
-    console.log("translatedArticle: ", translatedArticle);
-    console.log("id: ", id)
-    console.log("language: ", language)
     if (!translatedArticle) {
       const newArticle: NewArticle = {
         origin_id: id,
@@ -250,7 +239,6 @@ export class articleService {
         content: content,
         summary: summary,
         title: title,
-        category: article.category,
         image: article.image,
         rank: article.rank,
         published_at: article.published_at,
@@ -260,7 +248,7 @@ export class articleService {
       translatedArticle.title = title;
       translatedArticle.content = content;
       translatedArticle.summary = summary;
-      console.log(await this.updateArticle(translatedArticle));
+      await this.updateArticle(translatedArticle);
     }
   }
 
