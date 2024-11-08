@@ -143,3 +143,6 @@ max_concurrency = 10
 # [[vectorize]]
 # binding = "MY_INDEX"
 # index_name = "my-index"
+
+[triggers]
+crons = ["0 0 * * *"]

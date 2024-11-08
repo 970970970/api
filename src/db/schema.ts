@@ -80,3 +80,27 @@ export const media_files = sqliteTable('media_files', {
     uploadTimeIdx: index('upload_time_idx').on(table.upload_time),
   }
 });
+
+export const brands = sqliteTable('brands', {
+  id: integer('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull(),
+  status: text('status').notNull(), // 'support', 'neutral', 'avoid'
+  entity_type: text('entity_type').notNull(), // 'brand' 或 'company'
+  reasons: text('reasons'), // JSON 数组字符串存储原因
+  countries: text('countries'), // JSON 数组字符串存储国家代码
+  categories: text('categories'), // JSON 数组字符串存储类别
+  website: text('website'),
+  logo_url: text('logo_url'),
+  alternatives: text('alternatives'), // JSON 数组字符串存储替代品牌
+  alternatives_text: text('alternatives_text'),
+  stakeholders: text('stakeholders'), // JSON 数组字符串存储利益相关者信息
+  created_at: integer('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updated_at: integer('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => {
+  return {
+    nameIdx: index('brand_name_idx').on(table.name),
+    statusIdx: index('brand_status_idx').on(table.status),
+    entityTypeIdx: index('brand_entity_type_idx').on(table.entity_type),
+  }
+});

@@ -1,34 +1,24 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { prettyJSON } from 'hono/pretty-json'
-import { artcile } from './api/article';
+import { showRoutes } from 'hono/dev';
+import { article } from './api/article';
 import { language } from './api/language';
 import { ai } from './api/ai';
 import { utils } from './api/utils';
-import { administrator } from './api/administrator';
-import { media } from './api/media';
-import { showRoutes } from 'hono/dev'
-import { articleService } from './services/article';
-import { initDbConnect } from "./db/index";
-import { articles as Article } from "./db/schema";
-import { eq } from 'drizzle-orm';
-import { ArticleProcessor, ArticleProcessorType } from './durable_objects/ArticleProcessor';
+import { brand } from './api/brand';
+import { syncBrands } from './tasks/sync-brands';
+import { ArticleProcessor } from './workers/article-processor';
 
+// 扩展 Env 类型
 export interface Env {
 	DB: D1Database;
 	BUCKET: R2Bucket;
 	CACHE: KVNamespace;
-	AI: Ai;
 	ENV_TYPE: 'dev' | 'prod' | 'stage';
 	JWT_SECRET: string;
-	DEEPSEEK_TOKEN: string;
-	SILICONFLOW_TOKEN: string;
 	QUEUE: Queue;
 	ARTICLE_PROCESSOR: DurableObjectNamespace;
-	DEEPSEEK_URL: string;
-	SILICONFLOW_URL: string;
-	AI_PROVIDER: string; // 用于指定当前使用的 AI 提供商
-	[key: string]: unknown;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -48,11 +38,16 @@ app.use('/v1/*',
 app.notFound((c) => c.json({ status: 404, msg: 'Not Found' }))
 
 app.route('/v1/ai', ai)
-app.route('/v1/articles', artcile)
+app.route('/v1/articles', article)
 app.route('/v1/languages', language)
 app.route('/v1/utils', utils)
-app.route('/v1/administrator', administrator)
-app.route('/v1/media', media)
+app.route('/v1/brands', brand)
+
+// 注册定时任务处理器
+app.get("/tasks/sync-brands", async (c) => {
+	const result = await syncBrands(c.env);
+	return c.json(result);
+});
 
 showRoutes(app, { verbose: true })
 
@@ -87,7 +82,7 @@ const actionMap: ActionMap = {
 
 export default {
 	fetch: app.fetch,
-	async queue(batch: MessageBatch<string>, env: Env) {
+	async queue(batch: MessageBatch<any>, env: Env) {
 		const promises = batch.messages.map(async (message) => {
 			try {
 				const body = message.body;
@@ -116,6 +111,10 @@ export default {
 		await Promise.all(promises);
 	},
 	ArticleProcessor,
+	// 处理定时触发
+	scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
+		ctx.waitUntil(syncBrands(env));
+	},
 };
 
 export { ArticleProcessor };

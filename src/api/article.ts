@@ -14,8 +14,8 @@ export type Env = {
   QUEUE: Queue;
 };
 
-const artcile = new Hono<{ Bindings: Env }>()
-const secure = new Hono<{ Bindings: Env }>()
+const article = new Hono<{ Bindings: Env }>();
+const secure = new Hono<{ Bindings: Env }>();
 
 secure.use('*', async (c, next) => {
   const jwtMiddleware = jwt({
@@ -189,7 +189,7 @@ secure.get("", async (c) => {
 });
 
 // 修改文章列表接口
-artcile.get("/list/:mod/:language", async (c) => {
+article.get("/list/:mod/:language", async (c) => {
   const db = initDbConnect(c.env.DB);
   const modCode = c.req.param('mod');
   const language = c.req.param('language');
@@ -274,7 +274,7 @@ artcile.get("/list/:mod/:language", async (c) => {
 });
 
 // 获取单篇文章（公开接口）
-artcile.get("/:id{[0-9]+}", async (c) => {
+article.get("/:id{[0-9]+}", async (c) => {
   console.log('get article by id')
   const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));
@@ -825,7 +825,7 @@ secure.delete("/:id{[0-9]+}", async (c) => {
 });
 
 // 获取特定模块的单篇文章（用户协议/隐私政策）
-artcile.get("/mod/:code/:language", async (c) => {
+article.get("/mod/:code/:language", async (c) => {
   const db = initDbConnect(c.env.DB);
   const modCode = c.req.param('code');    // 例如：user_agreement 或 privacy_policy
   const language = c.req.param('language');
@@ -958,6 +958,6 @@ secure.post("/translate/:id", async (c) => {
   }
 });
 
-artcile.route("/secure", secure)
+article.route("/secure", secure);
 
-export { artcile }
+export { article };
