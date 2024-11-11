@@ -9,6 +9,8 @@ import { utils } from './api/utils';
 import { brand } from './api/brand';
 import { syncBrands } from './tasks/sync-brands';
 import { ArticleProcessor } from './workers/article-processor';
+import { media } from './api/media';
+import { administrator } from './api/administrator';
 
 // 扩展 Env 类型
 export interface Env {
@@ -42,6 +44,8 @@ app.route('/v1/articles', article)
 app.route('/v1/languages', language)
 app.route('/v1/utils', utils)
 app.route('/v1/brands', brand)
+app.route('/v1/media', media)
+app.route('/v1/administrator', administrator)
 
 // 注册定时任务处理器
 app.get("/tasks/sync-brands", async (c) => {

@@ -66,8 +66,6 @@ export const languages = sqliteTable('languages', {
 
 export const media_files = sqliteTable('media_files', {
   id: integer('id').primaryKey(),
-  type_id: integer('type_id').notNull(),
-  name: text('name').notNull(),
   path: text('path').notNull(),
   content_type: text('content_type').notNull(),
   size: integer('size'),
@@ -75,8 +73,6 @@ export const media_files = sqliteTable('media_files', {
   upload_time: integer('upload_time').default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => {
   return {
-    typeIdIdx: index('type_id_idx').on(table.type_id),
-    nameIdx: index('name_idx').on(table.name),
     uploadTimeIdx: index('upload_time_idx').on(table.upload_time),
   }
 });

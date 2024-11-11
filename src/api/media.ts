@@ -1,9 +1,8 @@
 import { Hono } from 'hono';
-import { nanoid } from "nanoid";
 import { initDbConnect } from "../db/index";
 import { media_files } from "../db/schema";
-import { count, eq } from "drizzle-orm";
 import { jwt } from 'hono/jwt'
+import { eq, desc, or, like, and, sql } from 'drizzle-orm';
 
 export type Env = {
   DB: D1Database;
@@ -13,9 +12,51 @@ export type Env = {
   JWT_SECRET: string;
 };
 
-export const media = new Hono<{ Bindings: Env }>()
-const secure = new Hono<{ Bindings: Env }>()
+// 添加 FormDataFile 接口定义
+interface FormDataFile {
+  name: string;
+  type: string;
+  size: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
 
+// MIME 类型映射
+const MIME_TYPES = {
+  // 图片
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  // 视频
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.ogg': 'video/ogg',
+  '.mov': 'video/quicktime',
+  // 音频
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  // 文档
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+} as const;
+
+// 获取文件的 MIME 类型
+function getMimeType(filename: string): string {
+  const ext = '.' + filename.split('.').pop()?.toLowerCase();
+  return ext && MIME_TYPES[ext as keyof typeof MIME_TYPES] || 'application/octet-stream';
+}
+
+const media = new Hono<{ Bindings: Env }>();
+const secure = new Hono<{ Bindings: Env }>();
+
+// JWT 中间件
 secure.use('*', async (c, next) => {
   const jwtMiddleware = jwt({
     secret: c.env.JWT_SECRET,
@@ -24,169 +65,355 @@ secure.use('*', async (c, next) => {
     await jwtMiddleware(c, next)
   } catch (e) {
     return c.json({
-      status: 401, msg: 'unauthorized',
+      status: 401,
+      msg: 'unauthorized',
     })
   }
 });
 
-secure.get("", async (c) => {
+// 获取媒体文件列表
+secure.get("/list", async (c) => {
   const db = initDbConnect(c.env.DB);
-  const offset = Number(c.req.query('offset')) || 0;
-  const limit = Number(c.req.query('limit')) || 10;
-  const files = await db.select().from(media_files).offset(offset).limit(limit);
-  const total = await db.select({ value: count() }).from(media_files);
-  return c.json({
-    status: 0, msg: 'ok', data: {
-      items: files,
-      total: total[0].value,
-    }
-  });
-})
+  const limit = Number(c.req.query('limit') || '10');
+  const offset = Number(c.req.query('offset') || '0');
+  const keywords = c.req.query('keywords');
 
-secure.post("/tmp_upload", async (c) => {
-  //上传单个文件，放在临时目录，等待表单提交后上传到r2
-  const body = await c.req.parseBody();
-  const key = nanoid(10)
-  const file = body.file
-  if (file instanceof File) {
-    const fileBuffer = await file.arrayBuffer()
-    const path = `media/tmp/${nanoid()}.${file.name.split('.').pop()}`
-    const upload = await c.env.BUCKET.put(path, fileBuffer)
-    if (upload) {
-      return c.json({
-        status: 0, msg: 'ok', data: {
-          value: path
-        }
-      })
-    } else {
-      return c.json({
-        status: 400, msg: 'upload failed', data: null
-      })
+  try {
+    const query = db.select().from(media_files);
+    const whereConditions = [];
+    if (keywords) {
+      whereConditions.push(
+        or(
+          like(media_files.path, `%${keywords}%`),
+          like(media_files.description, `%${keywords}%`)
+        )
+      );
     }
-  } else {
+
+    const finalQuery = whereConditions.length > 0
+      ? query.where(and(...whereConditions))
+      : query;
+
+    const totalResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(media_files)
+      .where(whereConditions.length > 0 ? and(...whereConditions) : undefined)
+      .get();
+
+    const items = await finalQuery
+      .limit(limit)
+      .offset(offset)
+      .orderBy(desc(media_files.upload_time))
+      .execute();
+
     return c.json({
-      status: 400, msg: 'invalid file', data: null
-    })
-  }
-})
-
-secure.post("/upload", async (c) => {
-  //上传文件处理流程
-  const body = await c.req.json();
-  const src_path = body.file
-  const ext = src_path.split('.').pop()
-  if (!src_path.startsWith('media/tmp')) {
+      status: 0,
+      msg: "ok",
+      data: {
+        items,
+        total: totalResult?.count || 0
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching media files:", error);
     return c.json({
-      status: 400, msg: 'invalid path', data: null
-    })
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
   }
-  const key = nanoid(10)
-  const src_file = await c.env.BUCKET.get(src_path)
-  if (src_file === null) {
-    return c.json({ status: 400, msg: 'file not found', data: null })
-  }
-  const move = await c.env.BUCKET.put(`media/system/${key}.${ext}`, src_file.body)
-  if (move === null) {
-    return c.json({ status: 400, msg: 'move failed', data: null })
-  }
+});
 
-  const db = initDbConnect(c.env.DB);
-  const action = await db
-    .insert(media_files)
-    .values({
-      name: body.name,
-      description: body.description,
-      type_id: body.type_id,
-      path: `media/system/${key}.${ext}`,
-      content_type: src_file.httpMetadata?.contentType || 'application/octet-stream',
-      size: src_file.size,
-      upload_time: Date.now()
-    })
-    .execute();
-  if (!action.success) {
-    return c.json({ status: 400, msg: 'insert failed', data: null })
-  }
-  // 删除原有文件
-  await c.env.BUCKET.delete(src_path)
-  return c.json({
-    status: 0, msg: 'ok', data: action.meta
-  })
-})
-
-secure.put("/:id", async (c) => {
-  //修改文件信息
-  const id = Number(c.req.param('id'));
-  const body = await c.req.json();
-  const db = initDbConnect(c.env.DB);
-  const media = await db.query.media_files.findFirst({ where: (item, { eq }) => eq(item.id, id) });
-  if (!media) {
-    return c.notFound()
-  }
-  if (body.file && body.file.startsWith('media/tmp')) {
-    //文件发生变化,处理更新文件逻辑
-    //从数据库中获取原有文件的路径，调用d1删除接口删除原有文件，再调用d1上传接口上传新文件
-    const old_path = media.path
-
-    const key = nanoid(10)
-    const ext = body.file.split('.').pop()
-    const src_file = await c.env.BUCKET.get(body.file)
-    if (src_file === null) {
-      return c.json({ status: 400, msg: 'file not found', data: null })
-    }
-    const move = await c.env.BUCKET.put(`media/system/${key}.${ext}`, src_file.body)
-    if (move === null) {
-      return c.json({ status: 400, msg: 'move failed', data: null })
-    }
-    const path = `media/system/${key}.${ext}`
-    //删除原有文件
-    await c.env.BUCKET.delete(media.path)
-    await c.env.BUCKET.delete(old_path)
-    media.path = path
-  }
-  media.name = body.name
-  media.description = body.description
-  media.type_id = body.type_id
-  const action = await db
-    .update(media_files)
-    .set(media)
-    .where(eq(media_files.id, id))
-    .execute();
-  return c.json({
-    status: 0, msg: 'ok', data: action.meta
-  })
-})
-
-secure.delete("/:id", async (c) => {
-  const db = initDbConnect(c.env.DB);
-  const id = Number(c.req.param('id'));
-  const media = await db.query.media_files.findFirst({ where: (item, { eq }) => eq(item.id, id) });
-  if (!media) {
-    return c.notFound()
-  }
-  const path = media.path
-  //删除文件
-  await c.env.BUCKET.delete(path)
-
-  const action = await db
-    .delete(media_files)
-    .where(eq(media_files.id, id))
-    .execute();
-  return c.json({
-    status: 0, msg: 'ok', data: null
-  })
-})
-
-//查看文件
+// 获取单个媒体文件详情
 secure.get("/:id", async (c) => {
   const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));
-  const file = await db.query.media_files.findFirst({ where: (item, { eq }) => eq(item.id, id) });
-  if (!file) {
-    return c.notFound()
-  }
-  return c.json({
-    status: 0, msg: 'ok', data: file
-  })
-})
 
-media.route("/secure", secure)
+  try {
+    const file = await db
+      .select()
+      .from(media_files)
+      .where(eq(media_files.id, id))
+      .get();
+
+    if (!file) {
+      return c.json({
+        status: 404,
+        msg: "File not found",
+        data: null
+      }, 404);
+    }
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: file
+    });
+  } catch (error) {
+    console.error("Error fetching media file:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 更新媒体文件信息
+secure.put("/:id", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json();
+
+  try {
+    const result = await db
+      .update(media_files)
+      .set({
+        description: body.description
+      })
+      .where(eq(media_files.id, id))
+      .returning()
+      .get();
+
+    if (!result) {
+      return c.json({
+        status: 404,
+        msg: "File not found",
+        data: null
+      }, 404);
+    }
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: result
+    });
+  } catch (error) {
+    console.error("Error updating media file:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 删除媒体文件
+secure.delete("/:id", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+
+  try {
+    // 先获取文件信息
+    const file = await db
+      .select()
+      .from(media_files)
+      .where(eq(media_files.id, id))
+      .get();
+
+    if (!file) {
+      return c.json({
+        status: 404,
+        msg: "File not found",
+        data: null
+      }, 404);
+    }
+
+    // 从 R2 存储中删除文件
+    await c.env.BUCKET.delete(file.path);
+
+    // 从数据库中删除记录
+    await db
+      .delete(media_files)
+      .where(eq(media_files.id, id))
+      .execute();
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: null
+    });
+  } catch (error) {
+    console.error("Error deleting media file:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 获取文件扩展名的辅助函数
+function getFileExtension(filename: string): string {
+  const parts = filename.split('.');
+  return parts.length > 1 ? `.${parts[parts.length - 1]}` : '';
+}
+
+// 临时文件上传
+secure.post("/upload/tmp", async (c) => {
+  const formData = await c.req.formData();
+  const formFile = formData.get('file');
+  
+  if (!formFile || typeof formFile === 'string') {
+    return c.json({
+      status: 400,
+      msg: "No file uploaded",
+      data: null
+    }, 400);
+  }
+
+  const file = formFile as unknown as FormDataFile;
+  const contentType = getMimeType(file.name);
+  console.log("File content type:", contentType);
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}${getFileExtension(file.name)}`;
+    const tmpPath = `tmp_uploads/${fileName}`;
+
+    await c.env.BUCKET.put(tmpPath, buffer, {
+      httpMetadata: {
+        contentType: contentType,
+      }
+    });
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: {
+        filename: fileName,
+        path: tmpPath,
+        originalName: file.name,
+        size: buffer.byteLength,
+        type: contentType
+      }
+    });
+  } catch (error) {
+    console.error("Error during file upload:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 确认上传
+secure.post("/upload/confirm", async (c) => {
+  const body = await c.req.json();
+  const db = initDbConnect(c.env.DB);
+  
+  console.log("Confirm upload request body:", body);
+  
+  try {
+    // 使用文件对象中的 path
+    const tmpPath = body.file.path;
+    console.log("Looking for temporary file at path:", tmpPath);
+
+    // 从临时位置获取文件
+    const tmpFile = await c.env.BUCKET.get(tmpPath);
+    console.log("Temporary file found:", !!tmpFile);
+    
+    if (!tmpFile) {
+      // 列出 bucket 中的所有文件用于调试
+      const list = await c.env.BUCKET.list();
+      console.log("Files in bucket:", list.objects.map(obj => obj.key));
+      
+      return c.json({
+        status: 404,
+        msg: "Temporary file not found",
+        data: null
+      }, 404);
+    }
+
+    // 生成正式路径
+    const fileName = tmpPath.split('/').pop(); // 获取文件名
+    const formalPath = `uploads/${fileName}`;
+    console.log("Moving file to formal path:", formalPath);
+
+    // 移动文件（在 R2 中实际上是复制然后删除）
+    await c.env.BUCKET.put(formalPath, tmpFile.body, {
+      httpMetadata: tmpFile.httpMetadata
+    });
+    console.log("File copied to formal path");
+    
+    await c.env.BUCKET.delete(tmpPath);
+    console.log("Temporary file deleted");
+
+    // 保存到数据库
+    const result = await db
+      .insert(media_files)
+      .values({
+        path: formalPath,
+        content_type: body.file.type,
+        size: body.file.size,
+        description: body.description || null,
+      })
+      .returning()
+      .get();
+
+    console.log("Database record created:", result);
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: result
+    });
+  } catch (error) {
+    console.error("Error confirming upload:", error);
+    if (error instanceof Error) {
+      console.error("Error details:", {
+        message: error.message,
+        stack: error.stack
+      });
+    }
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 从 R2 获取资源
+media.get("/local/*", async (c) => {
+  // 从 URL 中获取文件路径，去掉 /local/ 前缀
+  const key = c.req.path.replace("/v1/media/local/", "");
+  
+  try {
+    // 从 R2 获取文件
+    const file = await c.env.BUCKET.get(key);
+    
+    if (!file) {
+      return c.json({
+        status: 404,
+        msg: "File not found",
+        data: null
+      }, 404);
+    }
+
+    // 获取文件内容
+    const data = await file.arrayBuffer();
+
+    // 返回文件，设置正确的 content-type
+    return new Response(data, {
+      headers: {
+        'Content-Type': file.httpMetadata?.contentType || getMimeType(key),
+        'Content-Length': file.size.toString(),
+        'Cache-Control': 'public, max-age=31536000',
+      },
+    });
+
+  } catch (error) {
+    console.error("Error serving file from R2:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+media.route("/secure", secure);
+
+export { media };
