@@ -1,0 +1,1 @@
+ALTER TABLE brands ADD COLUMN logo_media_id INTEGER; 
