@@ -159,29 +159,71 @@ secure.get("/:id", async (c) => {
   }
 });
 
-// 更新媒体文件信息
+// 更新媒体文件
 secure.put("/:id", async (c) => {
-  const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));
   const body = await c.req.json();
-
+  const db = initDbConnect(c.env.DB);
+  
   try {
-    const result = await db
-      .update(media_files)
-      .set({
-        description: body.description
-      })
+    // 先获取原有记录
+    const originalFile = await db
+      .select()
+      .from(media_files)
       .where(eq(media_files.id, id))
-      .returning()
       .get();
 
-    if (!result) {
+    if (!originalFile) {
       return c.json({
         status: 404,
         msg: "File not found",
         data: null
       }, 404);
     }
+
+    // 准备更新数据
+    const updateData: any = {
+      description: body.description
+    };
+
+    // 如果上传了新文件
+    if (body.file?.path && body.file.path !== originalFile.path) {
+      console.log("New file uploaded, processing file replacement");
+      
+      // 获取临时文件
+      const tmpFile = await c.env.BUCKET.get(body.file.path);
+      if (!tmpFile) {
+        return c.json({
+          status: 404,
+          msg: "Temporary file not found",
+          data: null
+        }, 404);
+      }
+
+      // 使用原有的路径覆盖文件
+      await c.env.BUCKET.put(originalFile.path, tmpFile.body, {
+        httpMetadata: tmpFile.httpMetadata
+      });
+      console.log("File replaced at original path:", originalFile.path);
+
+      // 删除临时文件
+      await c.env.BUCKET.delete(body.file.path);
+      console.log("Temporary file deleted:", body.file.path);
+
+      // 更新文件类型和大小
+      updateData.content_type = body.file.type;
+      updateData.size = body.file.size;
+    }
+
+    // 更新数据库记录
+    const result = await db
+      .update(media_files)
+      .set(updateData)
+      .where(eq(media_files.id, id))
+      .returning()
+      .get();
+
+    console.log("Database record updated:", result);
 
     return c.json({
       status: 0,

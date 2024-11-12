@@ -3,6 +3,7 @@ import { initDbConnect } from "../db/index";
 import { brands } from "../db/schema";
 import { jwt } from 'hono/jwt'
 import { eq, desc, or, like, and, sql } from 'drizzle-orm';
+import { media_files } from "../db/schema";
 
 export type Env = {
   DB: D1Database;
@@ -31,28 +32,30 @@ secure.use('*', async (c, next) => {
 });
 
 // 获取品牌列表
-secure.get("/", async (c) => {
+secure.get("/list", async (c) => {
   const db = initDbConnect(c.env.DB);
-  const page = Number(c.req.query('page') || '1');
-  const pageSize = Number(c.req.query('pageSize') || '10');
-  const search = c.req.query('search');
-  const entityType = c.req.query('entity_type');
-  const status = c.req.query('status');
+  const limit = Number(c.req.query('limit') || '10');
+  const offset = Number(c.req.query('offset') || '0');
+  const keywords = c.req.query('keywords');
 
   try {
-    // 构建基础查询
-    const query = db.select().from(brands);
+    // 构建基础查询，联接 media_files 表
+    const query = db
+      .select({
+        id: brands.id,
+        name: brands.name,
+        description: brands.description,
+        status: brands.status,
+        logo_media_id: brands.logo_media_id,
+        logo_path: media_files.path
+      })
+      .from(brands)
+      .leftJoin(media_files, eq(brands.logo_media_id, media_files.id));
 
     // 构建条件
     const whereConditions = [];
-    if (search) {
-      whereConditions.push(like(brands.name, `%${search}%`));
-    }
-    if (entityType) {
-      whereConditions.push(eq(brands.entity_type, entityType));
-    }
-    if (status) {
-      whereConditions.push(eq(brands.status, status));
+    if (keywords) {
+      whereConditions.push(like(brands.name, `%${keywords}%`));
     }
 
     // 应用条件
@@ -69,15 +72,14 @@ secure.get("/", async (c) => {
 
     // 获取分页数据
     const items = await finalQuery
-      .limit(pageSize)
-      .offset((page - 1) * pageSize)
-      .orderBy(desc(brands.id))
+      .limit(limit)
+      .offset(offset)
       .execute();
 
     console.log('Query result:', {
       total: totalResult?.count || 0,
-      page,
-      pageSize,
+      limit,
+      offset,
       itemCount: items.length
     });
 
@@ -86,9 +88,7 @@ secure.get("/", async (c) => {
       msg: "ok",
       data: {
         items,
-        total: totalResult?.count || 0,
-        page,
-        pageSize
+        total: totalResult?.count || 0
       }
     });
   } catch (error) {
