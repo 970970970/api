@@ -1,9 +1,8 @@
 import { Hono } from 'hono';
 import { initDbConnect } from "../db/index";
-import { brands } from "../db/schema";
+import { brands, media_files } from "../db/schema";
 import { jwt } from 'hono/jwt'
 import { eq, desc, or, like, and, sql } from 'drizzle-orm';
-import { media_files } from "../db/schema";
 
 export type Env = {
   DB: D1Database;
@@ -31,15 +30,14 @@ secure.use('*', async (c, next) => {
   }
 });
 
-// 获取品牌列表
-secure.get("/list", async (c) => {
+// 公开的品牌列表接口
+brand.get("/list", async (c) => {
   const db = initDbConnect(c.env.DB);
-  const limit = Number(c.req.query('limit') || '10');
+  const limit = Number(c.req.query('limit') || '20');
   const offset = Number(c.req.query('offset') || '0');
   const keywords = c.req.query('keywords');
 
   try {
-    // 构建基础查询，联接 media_files 表
     const query = db
       .select({
         id: brands.id,
@@ -52,36 +50,29 @@ secure.get("/list", async (c) => {
       .from(brands)
       .leftJoin(media_files, eq(brands.logo_media_id, media_files.id));
 
-    // 构建条件
-    const whereConditions = [];
-    if (keywords) {
-      whereConditions.push(like(brands.name, `%${keywords}%`));
-    }
-
-    // 应用条件
-    const finalQuery = whereConditions.length > 0
-      ? query.where(and(...whereConditions))
-      : query;
+    // 如果有关键词，添加搜索条件
+    const searchCondition = keywords ?
+      or(
+        sql`LOWER(${brands.name}) LIKE LOWER(${'%' + keywords + '%'})`,
+        sql`LOWER(${brands.description}) LIKE LOWER(${'%' + keywords + '%'})`
+      ) : undefined;
 
     // 获取总数
     const totalResult = await db
       .select({ count: sql<number>`count(*)` })
       .from(brands)
-      .where(whereConditions.length > 0 ? and(...whereConditions) : undefined)
+      .where(searchCondition)
       .get();
 
     // 获取分页数据
-    const items = await finalQuery
+    const items = await query
+      .where(searchCondition)
       .limit(limit)
       .offset(offset)
+      .orderBy(desc(brands.id))
       .execute();
 
-    console.log('Query result:', {
-      total: totalResult?.count || 0,
-      limit,
-      offset,
-      itemCount: items.length
-    });
+    console.log(`Fetched ${items.length} brands, total: ${totalResult?.count || 0}`);
 
     return c.json({
       status: 0,
@@ -101,15 +92,118 @@ secure.get("/list", async (c) => {
   }
 });
 
-// 获取单个品牌详情
-secure.get("/:id", async (c) => {
+// 热门搜索接口
+brand.get("/hot-searches", async (c) => {
+  const db = initDbConnect(c.env.DB);
+
+  try {
+    // 直接在数据库层面随机选择10个品牌
+    const brandResults = await db
+      .select({
+        name: brands.name,
+      })
+      .from(brands)
+      .orderBy(sql`RANDOM()`)
+      .limit(10)
+      .execute();
+
+    const selected = brandResults.map(brand => brand.name);
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: selected
+    });
+  } catch (error) {
+    console.error("Error fetching hot searches:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: []
+    }, 500);
+  }
+});
+
+// 品牌详情接口
+brand.get("/:id{[0-9]+}", async (c) => {
   const db = initDbConnect(c.env.DB);
   const id = Number(c.req.param('id'));
 
   try {
     const brand = await db
-      .select()
+      .select({
+        id: brands.id,
+        name: brands.name,
+        description: brands.description,
+        status: brands.status,
+        logo_media_id: brands.logo_media_id,
+        logo_path: media_files.path,
+        reasons: brands.reasons,
+        countries: brands.countries,
+        categories: brands.categories,
+        alternatives: brands.alternatives,
+        stakeholders: brands.stakeholders
+      })
       .from(brands)
+      .leftJoin(media_files, eq(brands.logo_media_id, media_files.id))
+      .where(eq(brands.id, id))
+      .get();
+
+    if (!brand) {
+      return c.json({
+        status: 404,
+        msg: "Brand not found",
+        data: null
+      }, 404);
+    }
+
+    // 解析 JSON 字符串字段
+    const result = {
+      ...brand,
+      reasons: brand.reasons ? JSON.parse(brand.reasons) : [],
+      countries: brand.countries ? JSON.parse(brand.countries) : [],
+      categories: brand.categories ? JSON.parse(brand.categories) : [],
+      alternatives: brand.alternatives ? JSON.parse(brand.alternatives) : [],
+      stakeholders: brand.stakeholders ? JSON.parse(brand.stakeholders) : []
+    };
+
+    return c.json({
+      status: 0,
+      msg: "ok",
+      data: result
+    });
+  } catch (error) {
+    console.error("Error fetching brand:", error);
+    return c.json({
+      status: 500,
+      msg: "Internal server error",
+      data: null
+    }, 500);
+  }
+});
+
+// 获取单个品牌详情
+secure.get("/:id{[0-9]+}", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const id = Number(c.req.param('id'));
+
+  try {
+    const brand = await db
+      .select({
+        id: brands.id,
+        name: brands.name,
+        description: brands.description,
+        status: brands.status,
+        logo_media_id: brands.logo_media_id,
+        logo_path: media_files.path,
+        reasons: brands.reasons,
+        countries: brands.countries,
+        categories: brands.categories,
+        alternatives: brands.alternatives,
+        stakeholders: brands.stakeholders
+      })
+      .from(brands)
+      .leftJoin(media_files, eq(brands.logo_media_id, media_files.id))
       .where(eq(brands.id, id))
       .get();
 
