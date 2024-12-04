@@ -30,6 +30,50 @@ secure.use('*', async (c, next) => {
   }
 });
 
+// 获取品牌列表的通用函数
+async function getBrandList(db: any, limit: number, offset: number, keywords?: string) {
+  const query = db
+    .select({
+      id: brands.id,
+      name: brands.name,
+      description: brands.description,
+      status: brands.status,
+      logo_media_id: brands.logo_media_id,
+      logo_path: media_files.path
+    })
+    .from(brands)
+    .leftJoin(media_files, eq(brands.logo_media_id, media_files.id));
+
+  // 如果有关键词，添加搜索条件
+  const searchCondition = keywords ?
+    or(
+      sql`LOWER(${brands.name}) LIKE LOWER(${'%' + keywords + '%'})`,
+      sql`LOWER(${brands.description}) LIKE LOWER(${'%' + keywords + '%'})`
+    ) : undefined;
+
+  // 获取总数
+  const totalResult = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(brands)
+    .where(searchCondition)
+    .get();
+
+  // 获取分页数据
+  const items = await query
+    .where(searchCondition)
+    .limit(limit)
+    .offset(offset)
+    .orderBy(desc(brands.id))
+    .execute();
+
+  console.log(`Fetched ${items.length} brands, total: ${totalResult?.count || 0}`);
+
+  return {
+    items,
+    total: totalResult?.count || 0
+  };
+}
+
 // 公开的品牌列表接口
 brand.get("/list", async (c) => {
   const db = initDbConnect(c.env.DB);
@@ -38,49 +82,11 @@ brand.get("/list", async (c) => {
   const keywords = c.req.query('keywords');
 
   try {
-    const query = db
-      .select({
-        id: brands.id,
-        name: brands.name,
-        description: brands.description,
-        status: brands.status,
-        logo_media_id: brands.logo_media_id,
-        logo_path: media_files.path
-      })
-      .from(brands)
-      .leftJoin(media_files, eq(brands.logo_media_id, media_files.id));
-
-    // 如果有关键词，添加搜索条件
-    const searchCondition = keywords ?
-      or(
-        sql`LOWER(${brands.name}) LIKE LOWER(${'%' + keywords + '%'})`,
-        sql`LOWER(${brands.description}) LIKE LOWER(${'%' + keywords + '%'})`
-      ) : undefined;
-
-    // 获取总数
-    const totalResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(brands)
-      .where(searchCondition)
-      .get();
-
-    // 获取分页数据
-    const items = await query
-      .where(searchCondition)
-      .limit(limit)
-      .offset(offset)
-      .orderBy(desc(brands.id))
-      .execute();
-
-    console.log(`Fetched ${items.length} brands, total: ${totalResult?.count || 0}`);
-
+    const result = await getBrandList(db, limit, offset, keywords);
     return c.json({
       status: 0,
       msg: "ok",
-      data: {
-        items,
-        total: totalResult?.count || 0
-      }
+      data: result
     });
   } catch (error) {
     console.error("Error fetching brands:", error);
@@ -89,6 +95,29 @@ brand.get("/list", async (c) => {
       msg: "Internal server error",
       data: null
     }, 500);
+  }
+});
+
+// 后台管理的品牌列表接口
+secure.get("/list", async (c) => {
+  const db = initDbConnect(c.env.DB);
+  const limit = Number(c.req.query('limit') || '20');
+  const offset = Number(c.req.query('offset') || '0');
+  const keywords = c.req.query('keywords');
+
+  try {
+    const result = await getBrandList(db, limit, offset, keywords);
+    return c.json({
+      status: 0,
+      msg: 'success',
+      data: result
+    });
+  } catch (e) {
+    console.error(e);
+    return c.json({
+      status: 500,
+      msg: 'server error',
+    });
   }
 });
 
